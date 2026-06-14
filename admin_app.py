@@ -15,24 +15,16 @@ if not excel_detectado:
     st.error("❌ No se encontró el archivo de Excel en tu GitHub.")
     st.stop()
 
-# --- CARGA SEGURA ---
+# --- CARGA SEGURA ADAPTADA A TU EXCEL ---
 @st.cache_data(ttl=2)
 def cargar_datos_seguros():
     try:
         df_partidos = pd.read_excel(excel_detectado, sheet_name="PARTIDOS", header=None, engine="openpyxl")
-        
-        # Cargar PUNTUACION ignorando filas vacías arriba automáticamente
         df_puntos = pd.read_excel(excel_detectado, sheet_name="PUNTUACION", engine="openpyxl")
-        # Si la primera columna no es útil, buscar la fila que contiene las cabeceras reales
-        for idx in range(min(5, len(df_puntos))):
-            if "NOMBRES" in df_puntos.iloc[idx].values or "NOMBRES" in df_puntos.columns:
-                if "NOMBRES" in df_puntos.iloc[idx].values:
-                    df_puntos.columns = df_puntos.iloc[idx]
-                    df_puntos = df_puntos.iloc[idx+1:].reset_index(drop=True)
-                break
-                
-        # Limpiar columnas de espacios
-        df_puntos.columns = [str(c).strip().upper() for c in df_puntos.columns]
+        
+        # Limpiar nombres de columnas eliminando espacios en blanco invisibles
+        df_puntos.columns = [str(c).strip() for c in df_puntos.columns]
+        
         return df_partidos, df_puntos, None
     except Exception as e:
         return None, None, str(e)
@@ -43,12 +35,13 @@ if error_msg:
     st.error(f"⚠️ Error al abrir el archivo: {error_msg}")
     st.stop()
 
-# Asegurar que existan las columnas clave limpias
-if "NOMBRES" not in df_puntuacion_original.columns or "PUNTOS" not in df_puntuacion_original.columns:
-    # Intento de rescate si las columnas se llaman ligeramente diferente
-    columnas_lista = list(df_puntuacion_original.columns)
-    st.error("❌ No se reconoció el formato de la pestaña 'PUNTUACION'.")
-    st.write("Columnas leídas en tu Excel actualmente:", columnas_lista)
+# Verificar que existan las columnas exactas que mostró tu pantalla
+col_nombres = "NOMBRES"
+col_puntos = "PUNTOS"
+
+if col_nombres not in df_puntuacion_original.columns or col_puntos not in df_puntuacion_original.columns:
+    st.error("❌ Formato incompatible en la pestaña 'PUNTUACION'.")
+    st.write("Columnas detectadas:", list(df_puntuacion_original.columns))
     st.stop()
 
 # Extraer la lista de partidos disponibles mapeando el archivo horizontalmente
@@ -69,7 +62,7 @@ for col_idx in range(2, df_original.shape[1] - 11, 5):
             "jugado": pd.notna(goles_l_actual)
         })
 
-# --- INTERFAZ GRÁFICA MÓVIL ---
+# --- INTERFAZ GRÁFICA ---
 st.title("⚽ Administrador Polla 2026")
 tab1, tab2 = st.tabs(["📝 Cargar Goles", "🏆 Ver Posiciones"])
 
@@ -83,9 +76,9 @@ with tab1:
     
     col1, col2 = st.columns(2)
     with col1:
-        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g_new")
+        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g_final")
     with col2:
-        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g_new")
+        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g_final")
         
     if st.button("💾 Guardar y Recalcular Puntos", type="primary"):
         df_original.iloc[1, partido_seleccionado_id] = nuevos_goles_l
@@ -121,11 +114,11 @@ with tab1:
                         nombre_limpio = str(jugador).strip().upper()
                         tabla_puntos_actualizada[nombre_limpio] = tabla_puntos_actualizada.get(nombre_limpio, 0) + pts
 
-        # Sincronizar hacia la tabla global
+        # Sincronizar hacia la tabla global respetando las columnas originales
         for i, row in df_puntuacion_original.iterrows():
-            nom = str(row['NOMBRES']).strip().upper()
+            nom = str(row[col_nombres]).strip().upper()
             if nom in tabla_puntos_actualizada:
-                df_puntuacion_original.at[i, 'PUNTOS'] = tabla_puntos_actualizada[nom]
+                df_puntuacion_original.at[i, col_puntos] = tabla_puntos_actualizada[nom]
         
         # Escribir y sobreescribir el archivo de manera limpia
         with pd.ExcelWriter(excel_detectado, engine="openpyxl") as writer:
@@ -138,6 +131,7 @@ with tab1:
 
 with tab2:
     st.subheader("🏆 Tabla de Posiciones Oficial")
-    # Mostrar solo columnas útiles limpias
-    vista_tabla = df_puntuacion_original[["NOMBRES", "PUNTOS"]].dropna(subset=["NOMBRES"])
-    st.dataframe(vista_tabla.sort_values(by="PUNTOS", ascending=False), hide_index=True, use_container_width=True)
+    # Mostrar solo columnas útiles y limpiar vacíos
+    vista_tabla = df_puntuacion_original[[col_nombres, col_puntos]].dropna(subset=[col_nombres])
+    st.dataframe(vista_tabla.sort_values(by=col_puntos, ascending=False), hide_index=True, use_container_width=True)
+    
