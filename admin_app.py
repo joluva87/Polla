@@ -4,7 +4,7 @@ import os
 
 st.set_page_config(page_title="Admin Polla 2026", page_icon="⚙️", layout="centered")
 
-# --- EVITAR ERROR DE ZIP CORRUPTO ---
+# --- BUSCADOR AUTOMÁTICO DE EXCEL ---
 excel_detectado = None
 for archivo in os.listdir("."):
     if "polla" in archivo.lower() and archivo.endswith(".xlsx"):
@@ -15,12 +15,24 @@ if not excel_detectado:
     st.error("❌ No se encontró el archivo de Excel en tu GitHub.")
     st.stop()
 
-# Carga segura con manejo de errores de empaquetado
-@st.cache_data(ttl=5)
+# --- CARGA SEGURA ---
+@st.cache_data(ttl=2)
 def cargar_datos_seguros():
     try:
         df_partidos = pd.read_excel(excel_detectado, sheet_name="PARTIDOS", header=None, engine="openpyxl")
+        
+        # Cargar PUNTUACION ignorando filas vacías arriba automáticamente
         df_puntos = pd.read_excel(excel_detectado, sheet_name="PUNTUACION", engine="openpyxl")
+        # Si la primera columna no es útil, buscar la fila que contiene las cabeceras reales
+        for idx in range(min(5, len(df_puntos))):
+            if "NOMBRES" in df_puntos.iloc[idx].values or "NOMBRES" in df_puntos.columns:
+                if "NOMBRES" in df_puntos.iloc[idx].values:
+                    df_puntos.columns = df_puntos.iloc[idx]
+                    df_puntos = df_puntos.iloc[idx+1:].reset_index(drop=True)
+                break
+                
+        # Limpiar columnas de espacios
+        df_puntos.columns = [str(c).strip().upper() for c in df_puntos.columns]
         return df_partidos, df_puntos, None
     except Exception as e:
         return None, None, str(e)
@@ -28,11 +40,18 @@ def cargar_datos_seguros():
 df_original, df_puntuacion_original, error_msg = cargar_datos_seguros()
 
 if error_msg:
-    st.error("⚠️ El archivo Excel subió corrupto a GitHub.")
-    st.info("💡 Solución: Elimina el archivo .xlsx de tu GitHub y vuélvelo a subir desde tu celular sin interrumpir la carga.")
+    st.error(f"⚠️ Error al abrir el archivo: {error_msg}")
     st.stop()
 
-# Extraer la lista de partidos disponibles
+# Asegurar que existan las columnas clave limpias
+if "NOMBRES" not in df_puntuacion_original.columns or "PUNTOS" not in df_puntuacion_original.columns:
+    # Intento de rescate si las columnas se llaman ligeramente diferente
+    columnas_lista = list(df_puntuacion_original.columns)
+    st.error("❌ No se reconoció el formato de la pestaña 'PUNTUACION'.")
+    st.write("Columnas leídas en tu Excel actualmente:", columnas_lista)
+    st.stop()
+
+# Extraer la lista de partidos disponibles mapeando el archivo horizontalmente
 lista_partidos = []
 for col_idx in range(2, df_original.shape[1] - 11, 5):
     equipo_l = df_original.iloc[0, col_idx]
@@ -44,35 +63,35 @@ for col_idx in range(2, df_original.shape[1] - 11, 5):
         
         lista_partidos.append({
             "id": col_idx,
-            "texto": f"{equipo_l} vs {equipo_v}",
+            "texto": f"{str(equipo_l).strip()} vs {str(equipo_v).strip()}",
             "goles_l": int(goles_l_actual) if pd.notna(goles_l_actual) else 0,
             "goles_v": int(goles_v_actual) if pd.notna(goles_v_actual) else 0,
             "jugado": pd.notna(goles_l_actual)
         })
 
-# --- INTERFAZ ---
-st.title("⚙️ Panel de Control Mundial 2026")
-tab1, tab2 = st.tabs(["⚽ Ingresar Marcador", "📊 Tabla de Posiciones"])
+# --- INTERFAZ GRÁFICA MÓVIL ---
+st.title("⚽ Administrador Polla 2026")
+tab1, tab2 = st.tabs(["📝 Cargar Goles", "🏆 Ver Posiciones"])
 
 with tab1:
     st.subheader("Registrar Resultado Oficial")
-    opciones_partido = {p["id"]: f"{'✅ ' if p['jugado'] else '⏳ '} {p['texto']}" for p in lista_partidos}
+    opciones_partido = {p["id"]: f"{'✅' if p['jugado'] else '⏳'} {p['texto']}" for p in lista_partidos}
     partido_seleccionado_id = st.selectbox("Selecciona el partido:", opciones_partido.keys(), format_func=lambda x: opciones_partido[x])
     
     info_partido = next(p for p in lista_partidos if p["id"] == partido_seleccionado_id)
-    st.write(f"Marcador actual: **{info_partido['goles_l']} - {info_partido['goles_v']}**")
+    st.write(f"Marcador actual en el sistema: **{info_partido['goles_l']} - {info_partido['goles_v']}**")
     
     col1, col2 = st.columns(2)
     with col1:
-        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g")
+        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g_new")
     with col2:
-        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g")
+        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g_new")
         
-    if st.button("💾 Guardar Marcador", type="primary"):
+    if st.button("💾 Guardar y Recalcular Puntos", type="primary"):
         df_original.iloc[1, partido_seleccionado_id] = nuevos_goles_l
         df_original.iloc[1, partido_seleccionado_id + 1] = nuevos_goles_v
         
-        # Recalcular puntos de la polla
+        # Recalcular puntos totales por jugador
         tabla_puntos_actualizada = {}
         for c_idx in range(2, df_original.shape[1] - 11, 5):
             real_l = df_original.iloc[1, c_idx]
@@ -99,22 +118,26 @@ with tab1:
                                 pts = 3 if (pron_l - pron_v) == (real_l - real_v) else 2
                         
                         df_original.iloc[fila_idx, c_idx + 3] = pts
-                        tabla_puntos_actualizada[str(jugador).strip().upper()] = tabla_puntos_actualizada.get(str(jugador).strip().upper(), 0) + pts
+                        nombre_limpio = str(jugador).strip().upper()
+                        tabla_puntos_actualizada[nombre_limpio] = tabla_puntos_actualizada.get(nombre_limpio, 0) + pts
 
+        # Sincronizar hacia la tabla global
         for i, row in df_puntuacion_original.iterrows():
             nom = str(row['NOMBRES']).strip().upper()
             if nom in tabla_puntos_actualizada:
                 df_puntuacion_original.at[i, 'PUNTOS'] = tabla_puntos_actualizada[nom]
         
+        # Escribir y sobreescribir el archivo de manera limpia
         with pd.ExcelWriter(excel_detectado, engine="openpyxl") as writer:
             df_original.to_excel(writer, sheet_name="PARTIDOS", index=False, header=False)
             df_puntuacion_original.to_excel(writer, sheet_name="PUNTUACION", index=False)
             
-        st.success("¡Resultados calculados y guardados!")
+        st.success("⚽ ¡Marcadores e historial de posiciones actualizados exitosamente!")
         st.cache_data.clear()
         st.rerun()
 
 with tab2:
-    st.subheader("🏆 Tabla de Posiciones")
-    st.dataframe(df_puntuacion_original.sort_values(by="PUNTOS", ascending=False), hide_index=True)
-    
+    st.subheader("🏆 Tabla de Posiciones Oficial")
+    # Mostrar solo columnas útiles limpias
+    vista_tabla = df_puntuacion_original[["NOMBRES", "PUNTOS"]].dropna(subset=["NOMBRES"])
+    st.dataframe(vista_tabla.sort_values(by="PUNTOS", ascending=False), hide_index=True, use_container_width=True)
