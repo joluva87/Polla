@@ -141,4 +141,3 @@ with tab2:
     st.subheader("🏆 Tabla de Posiciones Oficial")
     vista_tabla = df_puntuacion_original[["NOMBRES", "PUNTOS"]].dropna(subset=["NOMBRES"])
     st.dataframe(vista_tabla.sort_values(by="PUNTOS", ascending=False), hide_index=True, use_container_width=True)
-    
