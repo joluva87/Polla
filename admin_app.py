@@ -2,41 +2,43 @@ import streamlit as st
 import pandas as pd
 import os
 
-# Configuración de interfaz móvil
 st.set_page_config(page_title="Admin Polla 2026", page_icon="⚙️", layout="centered")
 
-EXCEL_FILE = "Polla mundial 2026.xlsx"
+# --- EVITAR ERROR DE ZIP CORRUPTO ---
+excel_detectado = None
+for archivo in os.listdir("."):
+    if "polla" in archivo.lower() and archivo.endswith(".xlsx"):
+        excel_detectado = archivo
+        break
 
-if not os.path.exists(EXCEL_FILE):
-    st.error(f"No se encontró el archivo '{EXCEL_FILE}' en el directorio actual.")
+if not excel_detectado:
+    st.error("❌ No se encontró el archivo de Excel en tu GitHub.")
     st.stop()
 
-# Funciones de carga de datos
-@st.cache_data(ttl=10)
-def cargar_partidos():
-    # Leer la hoja de partidos manteniendo la estructura original
-    df = pd.read_excel(EXCEL_FILE, sheet_name="PARTIDOS", header=None)
-    return df
+# Carga segura con manejo de errores de empaquetado
+@st.cache_data(ttl=5)
+def cargar_datos_seguros():
+    try:
+        df_partidos = pd.read_excel(excel_detectado, sheet_name="PARTIDOS", header=None, engine="openpyxl")
+        df_puntos = pd.read_excel(excel_detectado, sheet_name="PUNTUACION", engine="openpyxl")
+        return df_partidos, df_puntos, None
+    except Exception as e:
+        return None, None, str(e)
 
-def guardar_cambios(df_partidos, df_puntuacion):
-    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="w") as writer:
-        df_partidos.to_excel(writer, sheet_name="PARTIDOS", index=False, header=False)
-        df_puntuacion.to_excel(writer, sheet_name="PUNTUACION", index=False)
-    st.cache_data.clear()
+df_original, df_puntuacion_original, error_msg = cargar_datos_seguros()
 
-# --- PROCESAMIENTO DE LA INFORMACIÓN ---
-df_original = cargar_partidos()
-df_puntuacion_original = pd.read_excel(EXCEL_FILE, sheet_name="PUNTUACION")
+if error_msg:
+    st.error("⚠️ El archivo Excel subió corrupto a GitHub.")
+    st.info("💡 Solución: Elimina el archivo .xlsx de tu GitHub y vuélvelo a subir desde tu celular sin interrumpir la carga.")
+    st.stop()
 
-# Extraer la lista de partidos disponibles mapeando las columnas horizontales
+# Extraer la lista de partidos disponibles
 lista_partidos = []
-# Saltamos de 5 en 5 columnas según la estructura del Excel
 for col_idx in range(2, df_original.shape[1] - 11, 5):
     equipo_l = df_original.iloc[0, col_idx]
     equipo_v = df_original.iloc[0, col_idx + 1]
     
     if pd.notna(equipo_l) and pd.notna(equipo_v):
-        # Verificar si ya tiene resultado guardado en la Fila 1
         goles_l_actual = df_original.iloc[1, col_idx]
         goles_v_actual = df_original.iloc[1, col_idx + 1]
         
@@ -48,48 +50,36 @@ for col_idx in range(2, df_original.shape[1] - 11, 5):
             "jugado": pd.notna(goles_l_actual)
         })
 
-# --- INTERFAZ GRÁFICA ---
+# --- INTERFAZ ---
 st.title("⚙️ Panel de Control Mundial 2026")
-st.markdown("Actualiza marcadores oficiales desde tu teléfono. El sistema recalculará los puntos de todos.")
-
 tab1, tab2 = st.tabs(["⚽ Ingresar Marcador", "📊 Tabla de Posiciones"])
 
 with tab1:
-    st.subheader("Registrar Resultado Oficial FIFA")
-    
-    # Selector de partido optimizado para pantallas táctiles
+    st.subheader("Registrar Resultado Oficial")
     opciones_partido = {p["id"]: f"{'✅ ' if p['jugado'] else '⏳ '} {p['texto']}" for p in lista_partidos}
-    partido_seleccionado_id = st.selectbox("Selecciona el partido finalizado:", opciones_partido.keys(), format_func=lambda x: opciones_partido[x])
+    partido_seleccionado_id = st.selectbox("Selecciona el partido:", opciones_partido.keys(), format_func=lambda x: opciones_partido[x])
     
-    # Obtener datos del partido seleccionado
     info_partido = next(p for p in lista_partidos if p["id"] == partido_seleccionado_id)
+    st.write(f"Marcador actual: **{info_partido['goles_l']} - {info_partido['goles_v']}**")
     
-    st.info(f"Marcador actual en el Excel: **{info_partido['goles_l']} - {info_partido['goles_v']}**")
-    
-    # Campos numéricos de goles
     col1, col2 = st.columns(2)
     with col1:
-        nuevos_goles_l = st.number_input(f"Goles {df_original.iloc[0, partido_seleccionado_id]}", min_value=0, max_value=20, value=info_partido["goles_l"], step=1)
+        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g")
     with col2:
-        nuevos_goles_v = st.number_input(f"Goles {df_original.iloc[0, partido_seleccionado_id + 1]}", min_value=0, max_value=20, value=info_partido["goles_v"], step=1)
+        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g")
         
-    if st.button("💾 Guardar y Recalcular Polla", type="primary"):
-        # 1. Actualizar el marcador real en la Fila 1 del DataFrame
+    if st.button("💾 Guardar Marcador", type="primary"):
         df_original.iloc[1, partido_seleccionado_id] = nuevos_goles_l
         df_original.iloc[1, partido_seleccionado_id + 1] = nuevos_goles_v
         
-        # 2. Recalcular los puntos individuales de cada participante
+        # Recalcular puntos de la polla
         tabla_puntos_actualizada = {}
-        
         for c_idx in range(2, df_original.shape[1] - 11, 5):
             real_l = df_original.iloc[1, c_idx]
             real_v = df_original.iloc[1, c_idx + 1]
             
-            # Solo procesar si el partido ya se jugó
             if pd.notna(real_l) and pd.notna(real_v):
                 real_l, real_v = int(real_l), int(real_v)
-                
-                # Evaluar las apuestas de los jugadores de las filas inferiores
                 for fila_idx in range(2, df_original.shape[0]):
                     jugador = df_original.iloc[fila_idx, c_idx]
                     if pd.isna(jugador): continue
@@ -99,36 +89,32 @@ with tab1:
                     
                     if pd.notna(pron_l) and pd.notna(pron_v):
                         pron_l, pron_v = int(pron_l), int(pron_v)
-                        pts_partido = 0
-                        
-                        # REGLAS RECALCULO:
-                        # Marcador Exacto = 5 pts
+                        pts = 0
                         if pron_l == real_l and pron_v == real_v:
-                            pts_partido = 5
+                            pts = 5
                         else:
-                            # Tendencia = 2 pts
-                            t_pron = 1 if pron_l > pron_v else (0 if pron_l == pron_v else -1)
-                            t_real = 1 if real_l > real_v else (0 if real_l == real_v else -1)
-                            if t_pron == t_real:
-                                # Diferencia de goles = +1 pt
-                                pts_partido = 3 if (pron_l - pron_v) == (real_l - real_v) else 2
+                            t_p = 1 if pron_l > pron_v else (0 if pron_l == pron_v else -1)
+                            t_r = 1 if real_l > real_v else (0 if real_l == real_v else -1)
+                            if t_p == t_r:
+                                pts = 3 if (pron_l - pron_v) == (real_l - real_v) else 2
                         
-                        # Escribir los puntos en la columna "PUNTOS" correspondiente del jugador
-                        df_original.iloc[fila_idx, c_idx + 3] = pts_partido
-                        tabla_puntos_actualizada[str(jugador).strip().upper()] = tabla_puntos_actualizada.get(str(jugador).strip().upper(), 0) + pts_partido
+                        df_original.iloc[fila_idx, c_idx + 3] = pts
+                        tabla_puntos_actualizada[str(jugador).strip().upper()] = tabla_puntos_actualizada.get(str(jugador).strip().upper(), 0) + pts
 
-        # 3. Sincronizar los nuevos totales con la pestaña 'PUNTUACION'
         for i, row in df_puntuacion_original.iterrows():
-            nombre_puntuacion = str(row['NOMBRES']).strip().upper()
-            if nombre_puntuacion in tabla_puntos_actualizada:
-                df_puntuacion_original.at[i, 'PUNTOS'] = tabla_puntos_actualizada[nombre_puntuacion]
+            nom = str(row['NOMBRES']).strip().upper()
+            if nom in tabla_puntos_actualizada:
+                df_puntuacion_original.at[i, 'PUNTOS'] = tabla_puntos_actualizada[nom]
         
-        # 4. Impactar los cambios directamente en el archivo físico .xlsx
-        guardar_cambios(df_original, df_puntuacion_original)
-        st.success("¡Resultados guardados, fórmulas aplicadas y archivo Excel actualizado!")
+        with pd.ExcelWriter(excel_detectado, engine="openpyxl") as writer:
+            df_original.to_excel(writer, sheet_name="PARTIDOS", index=False, header=False)
+            df_puntuacion_original.to_excel(writer, sheet_name="PUNTUACION", index=False)
+            
+        st.success("¡Resultados calculados y guardados!")
+        st.cache_data.clear()
         st.rerun()
 
 with tab2:
-    st.subheader("🏆 Posiciones en Tiempo Real")
-    st.write("Datos extraídos directamente de la pestaña 'PUNTUACION':")
+    st.subheader("🏆 Tabla de Posiciones")
     st.dataframe(df_puntuacion_original.sort_values(by="PUNTOS", ascending=False), hide_index=True)
+    
