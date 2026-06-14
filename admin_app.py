@@ -15,44 +15,45 @@ if not excel_detectado:
     st.error("❌ No se encontró el archivo de Excel en tu GitHub.")
     st.stop()
 
-# --- CARGA ULTRA SEGURA DETECTANDO CABECERAS ---
+# --- CARGA ULTRA SEGURA POR POSICIÓN DE COLUMNA ---
 @st.cache_data(ttl=2)
 def cargar_datos_seguros():
     try:
         df_partidos = pd.read_excel(excel_detectado, sheet_name="PARTIDOS", header=None, engine="openpyxl")
+        
+        # Cargamos la pestaña PUNTUACION sin cabeceras (fuerza bruta por posición)
         df_puntos_raw = pd.read_excel(excel_detectado, sheet_name="PUNTUACION", header=None, engine="openpyxl")
         
-        # Buscar en qué fila se encuentran las palabras clave "NOMBRES" y "PUNTOS"
-        fila_cabecera = None
-        col_nombres_idx = None
-        col_puntos_idx = None
+        # Buscar en qué fila empieza la lista real de jugadores
+        # Buscamos una fila donde se mencione la palabra "NOMBRE" o "PUNTO" para saber dónde arranca
+        fila_datos_inicio = 0
+        idx_col_nombres = 2  # Por defecto la columna 2 (C)
+        idx_col_puntos = 3   # Por defecto la columna 3 (D)
         
         for idx_fila in range(len(df_puntos_raw)):
             valores_fila = [str(v).strip().upper() for v in df_puntos_raw.iloc[idx_fila].values]
-            # Buscar coincidencias parciales para evitar fallos por espacios invisibles
-            if any("NOMBRE" in v for v in valores_fila) and any("PUNTO" in v for v in valores_fila):
-                fila_cabecera = idx_fila
-                # Identificar los índices exactos de las columnas
+            if any("NOMBRE" in v for v in valores_fila) or any("PUNTO" in v for v in valores_fila):
+                fila_datos_inicio = idx_fila + 1
                 for idx_col, v in enumerate(valores_fila):
-                    if "NOMBRE" in v: col_nombres_idx = idx_col
-                    if "PUNTO" in v: col_puntos_idx = idx_col
+                    if "NOMBRE" in v: idx_col_nombres = idx_col
+                    if "PUNTO" in v: idx_col_puntos = idx_col
                 break
-                
-        if fila_cabecera is None:
-            return df_partidos, None, f"No se encontró una fila con las columnas 'NOMBRES' y 'PUNTOS' en la pestaña PUNTUACION. Columnas leídas en fila 0: {list(df_puntos_raw.iloc[0].values)}"
 
-        # Reconstruir el DataFrame limpio basándonos en los índices hallados
-        datos_limpios = df_puntos_raw.iloc[fila_cabecera + 1:].reset_index(drop=True)
+        # Extraer limpiamente las columnas usando sus posiciones numéricas exactas
         df_puntos = pd.DataFrame({
-            "NOMBRES": datos_limpios[col_nombres_idx],
-            "PUNTOS": datos_limpios[col_puntos_idx]
-        })
+            "NOMBRES": df_puntos_raw.iloc[fila_datos_inicio:, idx_col_nombres],
+            "PUNTOS": df_puntos_raw.iloc[fila_datos_inicio:, idx_col_puntos]
+        }).reset_index(drop=True)
         
-        # Guardar metadatos para poder sobreescribir el archivo original correctamente luego
-        st.session_state["fila_cabecera"] = fila_cabecera
-        st.session_state["col_nombres_idx"] = col_nombres_idx
-        st.session_state["col_puntos_idx"] = col_puntos_idx
-        st.session_state["df_puntos_raw"] = df_puntos_raw
+        # Limpiar filas completamente vacías
+        df_puntos = df_puntos.dropna(subset=["NOMBRES"])
+        df_puntos["NOMBRES"] = df_puntos["NOMBRES"].astype(str).str.strip()
+        
+        # Guardar estos índices en memoria para la fase de guardado
+        st.session_state["fila_inicio"] = fila_datos_inicio
+        st.session_state["c_nom_idx"] = idx_col_nombres
+        st.session_state["c_pts_idx"] = idx_col_puntos
+        st.session_state["matriz_puntos_original"] = df_puntos_raw
         
         return df_partidos, df_puntos, None
     except Exception as e:
@@ -61,10 +62,10 @@ def cargar_datos_seguros():
 df_original, df_puntuacion_original, error_msg = cargar_datos_seguros()
 
 if error_msg:
-    st.error(f"⚠️ Error de compatibilidad: {error_msg}")
+    st.error(f"⚠️ Error al abrir el archivo: {error_msg}")
     st.stop()
 
-# Extraer la lista de partidos disponibles mapeando el archivo horizontalmente
+# Extraer la lista de partidos de la pestaña horizontal
 lista_partidos = []
 for col_idx in range(2, df_original.shape[1] - 11, 5):
     equipo_l = df_original.iloc[0, col_idx]
@@ -96,15 +97,15 @@ with tab1:
     
     col1, col2 = st.columns(2)
     with col1:
-        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g_v3")
+        nuevos_goles_l = st.number_input(f"Goles Local", min_value=0, max_value=20, value=info_partido["goles_l"], step=1, key="l_g_v4")
     with col2:
-        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g_v3")
+        nuevos_goles_v = st.number_input(f"Goles Visitante", min_value=0, max_value=20, value=info_partido["goles_v"], step=1, key="v_g_v4")
         
     if st.button("💾 Guardar y Recalcular Puntos", type="primary"):
         df_original.iloc[1, partido_seleccionado_id] = nuevos_goles_l
         df_original.iloc[1, partido_seleccionado_id + 1] = nuevos_goles_v
         
-        # Recalcular puntos totales por jugador basado en las filas de apuestas
+        # Recalcular puntos de los participantes en la pestaña PARTIDOS
         tabla_puntos_actualizada = {}
         for c_idx in range(2, df_original.shape[1] - 11, 5):
             real_l = df_original.iloc[1, c_idx]
@@ -134,32 +135,30 @@ with tab1:
                         nombre_limpio = str(jugador).strip().upper()
                         tabla_puntos_actualizada[nombre_limpio] = tabla_puntos_actualizada.get(nombre_limpio, 0) + pts
 
-        # Sincronizar de vuelta mapeando sobre la matriz original recibida de Excel
-        df_salida_puntos = st.session_state["df_puntos_raw"].copy()
-        start_row = st.session_state["fila_cabecera"] + 1
-        c_nom = st.session_state["col_nombres_idx"]
-        c_pts = st.session_state["col_puntos_idx"]
+        # Escribir de vuelta los datos calculados en la matriz original de PUNTUACION
+        df_salida_puntos = st.session_state["matriz_puntos_original"].copy()
+        start_row = st.session_state["fila_inicio"]
+        c_nom = st.session_state["c_nom_idx"]
+        c_pts = st.session_state["c_pts_idx"]
         
         for i in range(start_row, len(df_salida_puntos)):
             val_nombre = df_salida_puntos.iloc[i, c_nom]
             if pd.notna(val_nombre):
                 nom_key = str(val_nombre).strip().upper()
                 if nom_key in tabla_puntos_actualizada:
-                    df_salida_puntos.iloc[i, c_pts] = tabla_puntos_actualizada[nom_key]
+                    df_salida_puntos.iloc[i, c_pts] = int(tabla_puntos_actualizada[nom_key])
         
-        # Escribir y guardar manteniendo la estructura original intacta
+        # Guardar en el archivo físico .xlsx
         with pd.ExcelWriter(excel_detectado, engine="openpyxl") as writer:
             df_original.to_excel(writer, sheet_name="PARTIDOS", index=False, header=False)
             df_salida_puntos.to_excel(writer, sheet_name="PUNTUACION", index=False, header=False)
             
-        st.success("⚽ ¡Marcadores y posiciones actualizados con éxito en el Excel!")
+        st.success("⚽ ¡Marcadores y posiciones actualizados con éxito!")
         st.cache_data.clear()
         st.rerun()
 
 with tab2:
     st.subheader("🏆 Tabla de Posiciones Oficial")
-    vista_tabla = df_puntuacion_original[["NOMBRES", "PUNTOS"]].dropna(subset=["NOMBRES"])
-    # Convertir a numérico para ordenar correctamente los puntajes elevados
-    vista_tabla["PUNTOS"] = pd.to_numeric(vista_tabla["PUNTOS"], errors="coerce").fillna(0).astype(int)
-    st.dataframe(vista_tabla.sort_values(by="PUNTOS", ascending=False), hide_index=True, use_container_width=True)
-                     
+    # Convertir a numérico seguro para ordenar
+    df_puntuacion_original["PUNTOS"] = pd.to_numeric(df_puntuacion_original["PUNTOS"], errors="coerce").fillna(0).astype(int)
+    st.dataframe(df_puntuacion_original.sort_values(by="PUNTOS", ascending=False), hide_index=True, use_container_width=True)
